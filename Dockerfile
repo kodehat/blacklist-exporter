@@ -1,21 +1,33 @@
-FROM golang:1.23 as builder
+FROM golang:1.24.2-alpine3.21 AS builder
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
+RUN go mod download
 
-RUN go mod download && go mod verify
+COPY *.go ./
 
-COPY . .
+RUN CGO_ENABLED=0 go build
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o blacklist_exporter main.go
+FROM alpine:3.21.3
 
-FROM gcr.io/distroless/static-debian11
+LABEL org.opencontainers.image.authors='dev@codehat.de' \
+      org.opencontainers.image.url='https://github.com/kodehat/blacklist-exporter' \
+      org.opencontainers.image.documentation='https://github.com/kodehat/blacklist-exporter' \
+      org.opencontainers.image.source='https://github.com/kodehat/blacklist-exporter' \
+      org.opencontainers.image.vendor='kodehat'
 
-WORKDIR /app
-COPY --from=builder /app/.env .
-COPY --from=builder /app/blacklist_exporter .
+WORKDIR /opt
 
-EXPOSE 2112
+# "curl" is added only for Docker healthchecks!
+RUN apk --no-cache add ca-certificates tzdata curl && \
+    update-ca-certificates && \
+    adduser -D -H nonroot
 
-CMD ["/app/blacklist_exporter"]
+COPY --from=builder --chown=nonroot:nonroot --chmod=550 /app/blacklist-exporter ./blacklist-exporter
+
+EXPOSE 2112/tcp
+
+USER nonroot:nonroot
+
+ENTRYPOINT [ "/opt/prometheus-storagebox-exporter" ]

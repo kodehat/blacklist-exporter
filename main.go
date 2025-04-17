@@ -2,15 +2,16 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/joho/godotenv"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -21,6 +22,10 @@ var (
 		},
 		[]string{"ip_address", "blacklist_name", "status"},
 	)
+	token       string
+	ipAddresses string
+	host        string
+	port        string
 )
 
 type BlacklistEntry struct {
@@ -35,13 +40,9 @@ type BlacklistResponse struct {
 }
 
 func getMetrics() {
-	godotenv.Load()
-	token := os.Getenv("API_TOKEN")
-	ipAddresses := os.Getenv("IP_ADDRESSES")
+	ipAddressesIter := strings.SplitSeq(ipAddresses, ",")
 
-	IPs := strings.Split(ipAddresses, ",")
-
-	for _, ipAddress := range IPs {
+	for ipAddress := range ipAddressesIter {
 		url := "https://api.mxtoolbox.com/api/v1/lookup/blacklist/" + ipAddress
 
 		req, _ := http.NewRequest("GET", url, nil)
@@ -52,7 +53,7 @@ func getMetrics() {
 		response, err := client.Do(req)
 		if err != nil {
 			log.Println("Error on response.\n[ERROR] -", err)
-			continue
+			return
 		}
 
 		defer response.Body.Close()
@@ -60,12 +61,13 @@ func getMetrics() {
 		body, err := io.ReadAll(response.Body)
 		if err != nil {
 			log.Println("Error while reading the response bytes: ", err)
+			return
 		}
 
 		var blacklistData BlacklistResponse
 		if err := json.Unmarshal(body, &blacklistData); err != nil {
 			log.Println("Error parsing JSON response:", err)
-			continue
+			return
 		}
 
 		for _, entry := range blacklistData.Passed {
@@ -75,14 +77,29 @@ func getMetrics() {
 			blacklistStatus.WithLabelValues(ipAddress, entry.Name, "Failed").Set(1)
 		}
 		for _, entry := range blacklistData.Warnings {
-			blacklistStatus.WithLabelValues(ipAddress, entry.Name, "Warnings").Set(0)
+			blacklistStatus.WithLabelValues(ipAddress, entry.Name, "Warning").Set(0)
 		}
 		for _, entry := range blacklistData.Timeouts {
-			blacklistStatus.WithLabelValues(ipAddress, entry.Name, "Timeouts").Set(0)
+			blacklistStatus.WithLabelValues(ipAddress, entry.Name, "Timeout").Set(0)
 		}
 	}
 }
 func main() {
+	token = os.Getenv("API_TOKEN")
+	ipAddresses = os.Getenv("IP_ADDRESSES")
+	host = os.Getenv("HOST")
+	port = os.Getenv("PORT")
+	if token == "" || ipAddresses == "" {
+		log.Fatal("Please provide API_TOKEN and IP_ADDRESSES as environment variables")
+	}
+	if host == "" {
+		log.Println("No host provided, using default (bind to all interfaces)")
+	}
+	if port == "" {
+		log.Println("No port provided, using default (2112)")
+		port = "2112"
+	}
+
 	prometheus.MustRegister(blacklistStatus)
 
 	go func() {
@@ -92,6 +109,7 @@ func main() {
 		}
 	}()
 
+	listenAddr := net.JoinHostPort(host, port)
 	http.Handle("/metrics", promhttp.Handler())
-	http.ListenAndServe(":2112", nil)
+	http.ListenAndServe(listenAddr, nil)
 }
