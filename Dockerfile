@@ -30,4 +30,4 @@ EXPOSE 2112/tcp
 
 USER nonroot:nonroot
 
-ENTRYPOINT [ "/opt/prometheus-storagebox-exporter" ]
+ENTRYPOINT [ "/opt/blacklist-exporter" ]
